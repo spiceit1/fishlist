@@ -1,6 +1,10 @@
 [build]
-  command = "npm run build"
+  command = "npm run netlify:build"
   publish = "dist"
+
+[build.environment]
+  NETLIFY_EMAILS_SECRET = "secret"
+  NODE_VERSION = "18"
 
 [[redirects]]
   from = "/*"

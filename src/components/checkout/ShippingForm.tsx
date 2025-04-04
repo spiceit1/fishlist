@@ -1,5 +1,6 @@
-import React from 'react';
-import { Package, Mail } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Package, Mail, AlertCircle } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
 
 interface ShippingFormProps {
   onSubmit: (data: ShippingFormData) => void;
@@ -42,9 +43,56 @@ const ShippingForm: React.FC<ShippingFormProps> = ({
 
   const [selectedAddress, setSelectedAddress] = React.useState<number>(-1);
   const [saveAddress, setSaveAddress] = React.useState(false);
+  const [existingCustomer, setExistingCustomer] = useState(false);
+  const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+  const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [resetPasswordSent, setResetPasswordSent] = useState(false);
+
+  // Check if email exists when it changes
+  useEffect(() => {
+    const checkEmailExists = async () => {
+      if (!formData.email || formData.email.trim() === '') return;
+
+      try {
+        // Check if this email exists in auth
+        const { data, error } = await supabase.auth.signInWithOtp({
+          email: formData.email,
+          options: {
+            shouldCreateUser: false
+          }
+        });
+
+        if (error && error.message.includes('Email not confirmed')) {
+          // This means the user exists but hasn't confirmed their email
+          setExistingCustomer(true);
+        } else if (!error) {
+          // No error means the email exists and OTP was sent
+          setExistingCustomer(true);
+        } else {
+          setExistingCustomer(false);
+        }
+      } catch (error) {
+        console.error('Error checking email:', error);
+      }
+    };
+
+    // Use debouncing to avoid too many API calls
+    const timeoutId = setTimeout(() => {
+      checkEmailExists();
+    }, 500);
+
+    return () => clearTimeout(timeoutId);
+  }, [formData.email]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (existingCustomer && !showLoginPrompt) {
+      setShowLoginPrompt(true);
+      return;
+    }
+    
     if (saveAddress && onSaveAddress) {
       onSaveAddress(formData);
     }
@@ -70,6 +118,44 @@ const ShippingForm: React.FC<ShippingFormProps> = ({
     setSelectedAddress(index);
   };
 
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: formData.email || '',
+        password
+      });
+
+      if (error) throw error;
+      
+      // Successfully logged in
+      if (saveAddress && onSaveAddress) {
+        onSaveAddress(formData);
+      }
+      onSubmit(formData);
+    } catch (error: any) {
+      console.error('Login error:', error);
+      setLoginError('Invalid password. Please try again.');
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(formData.email || '', {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+
+      if (error) throw error;
+      
+      setResetPasswordSent(true);
+    } catch (error) {
+      console.error('Reset password error:', error);
+      setLoginError('Failed to send reset password email. Please try again.');
+    }
+  };
+
   return (
     <div className="bg-white rounded-lg shadow-md p-6">
       <div className="flex items-center gap-2 text-lg font-semibold text-gray-900 mb-6">
@@ -77,7 +163,7 @@ const ShippingForm: React.FC<ShippingFormProps> = ({
         Shipping Information
       </div>
 
-      {savedAddresses.length > 0 && (
+      {savedAddresses.length > 0 && !showLoginPrompt && (
         <div className="mb-6">
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Saved Addresses
@@ -124,156 +210,237 @@ const ShippingForm: React.FC<ShippingFormProps> = ({
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">
-              First Name
-            </label>
-            <input
-              type="text"
-              value={formData.firstName}
-              onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-              required
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
-            />
-          </div>
+      {showLoginPrompt ? (
+        <div className="space-y-6">
+          {resetPasswordSent ? (
+            <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg">
+              Password reset email has been sent. Please check your inbox.
+            </div>
+          ) : (
+            <>
+              <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="font-medium">Existing customer detected</p>
+                  <p className="text-sm">We found an account with this email. Please login to continue.</p>
+                </div>
+              </div>
+              
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={formData.email || ''}
+                    disabled
+                    className="mt-1 block w-full rounded-md border-gray-300 bg-gray-100 shadow-sm"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
+                  />
+                </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Last Name
-            </label>
-            <input
-              type="text"
-              value={formData.lastName}
-              onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-              required
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
-            />
-          </div>
+                {loginError && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+                    {loginError}
+                  </div>
+                )}
 
-          {requireEmail && (
+                <div className="flex flex-col space-y-4">
+                  <button
+                    type="submit"
+                    className="bg-orange-500 text-white px-4 py-2 rounded-lg font-medium hover:bg-orange-600 transition-colors"
+                  >
+                    Login & Continue
+                  </button>
+                  
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    className="text-orange-600 hover:text-orange-700 text-sm font-medium transition-colors"
+                  >
+                    Forgot Password?
+                  </button>
+                  
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowLoginPrompt(false);
+                      setExistingCustomer(false);
+                    }}
+                    className="text-gray-600 hover:text-gray-700 text-sm font-medium transition-colors"
+                  >
+                    Continue as Guest
+                  </button>
+                </div>
+              </form>
+            </>
+          )}
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                First Name
+              </label>
+              <input
+                type="text"
+                value={formData.firstName}
+                onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
+                required
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                Last Name
+              </label>
+              <input
+                type="text"
+                value={formData.lastName}
+                onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
+                required
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
+              />
+            </div>
+
+            {requireEmail && (
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700">
+                  Email Address
+                </label>
+                <div className="mt-1 relative">
+                  <input
+                    type="email"
+                    value={formData.email || ''}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    required
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500 pl-10"
+                    placeholder="you@example.com"
+                  />
+                  <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+                </div>
+              </div>
+            )}
+
             <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700">
-                Email Address
+                Address Line 1
               </label>
-              <div className="mt-1 relative">
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  required
-                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500 pl-10"
-                  placeholder="you@example.com"
-                />
-                <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
-              </div>
+              <input
+                type="text"
+                value={formData.addressLine1}
+                onChange={(e) => setFormData({ ...formData, addressLine1: e.target.value })}
+                required
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
+              />
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700">
+                Address Line 2 (Optional)
+              </label>
+              <input
+                type="text"
+                value={formData.addressLine2}
+                onChange={(e) => setFormData({ ...formData, addressLine2: e.target.value })}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                City
+              </label>
+              <input
+                type="text"
+                value={formData.city}
+                onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+                required
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                State
+              </label>
+              <input
+                type="text"
+                value={formData.state}
+                onChange={(e) => setFormData({ ...formData, state: e.target.value })}
+                required
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                ZIP Code
+              </label>
+              <input
+                type="text"
+                value={formData.postalCode}
+                onChange={(e) => setFormData({ ...formData, postalCode: e.target.value })}
+                required
+                pattern="[0-9]{5}"
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                Phone
+              </label>
+              <input
+                type="tel"
+                value={formData.phone}
+                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                required
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
+              />
+            </div>
+          </div>
+
+          {onSaveAddress && selectedAddress === -1 && (
+            <div className="flex items-center">
+              <input
+                type="checkbox"
+                id="save-address"
+                checked={saveAddress}
+                onChange={(e) => setSaveAddress(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+              />
+              <label htmlFor="save-address" className="ml-2 block text-sm text-gray-900">
+                Save this address for future orders
+              </label>
             </div>
           )}
 
-          <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700">
-              Address Line 1
-            </label>
-            <input
-              type="text"
-              value={formData.addressLine1}
-              onChange={(e) => setFormData({ ...formData, addressLine1: e.target.value })}
-              required
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
-            />
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              className="bg-orange-500 text-white px-6 py-2 rounded-lg font-medium hover:bg-orange-600 transition-colors"
+            >
+              Continue to Payment
+            </button>
           </div>
-
-          <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700">
-              Address Line 2 (Optional)
-            </label>
-            <input
-              type="text"
-              value={formData.addressLine2}
-              onChange={(e) => setFormData({ ...formData, addressLine2: e.target.value })}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700">
-              City
-            </label>
-            <input
-              type="text"
-              value={formData.city}
-              onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-              required
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700">
-              State
-            </label>
-            <input
-              type="text"
-              value={formData.state}
-              onChange={(e) => setFormData({ ...formData, state: e.target.value })}
-              required
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700">
-              ZIP Code
-            </label>
-            <input
-              type="text"
-              value={formData.postalCode}
-              onChange={(e) => setFormData({ ...formData, postalCode: e.target.value })}
-              required
-              pattern="[0-9]{5}"
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Phone
-            </label>
-            <input
-              type="tel"
-              value={formData.phone}
-              onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-              required
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500"
-            />
-          </div>
-        </div>
-
-        {onSaveAddress && selectedAddress === -1 && (
-          <div className="flex items-center">
-            <input
-              type="checkbox"
-              id="save-address"
-              checked={saveAddress}
-              onChange={(e) => setSaveAddress(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
-            />
-            <label htmlFor="save-address" className="ml-2 block text-sm text-gray-900">
-              Save this address for future orders
-            </label>
-          </div>
-        )}
-
-        <div className="flex justify-end">
-          <button
-            type="submit"
-            className="bg-orange-500 text-white px-6 py-2 rounded-lg font-medium hover:bg-orange-600 transition-colors"
-          >
-            Continue to Payment
-          </button>
-        </div>
-      </form>
+        </form>
+      )}
     </div>
   );
 };

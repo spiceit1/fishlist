@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ExternalLink, Eye, EyeOff, Package, AlertCircle, Check, X, Trash2, ShoppingCart, Share2, Database, Link, Image } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ExternalLink, Eye, EyeOff, Package, AlertCircle, Check, X, Trash2, ShoppingCart, Share2, Database, Link, Image, Plus, Minus } from 'lucide-react';
 import { FishData } from '../types';
 import QuantityControl from './QuantityControl';
 import ImageLoader from './ImageLoader';
@@ -10,6 +10,8 @@ import EbayService from '../utils/ebayService';
 import ImageCache from '../utils/imageCache';
 import { ImagePasteModal } from './ImagePasteModal';
 import ImageStorage from '../utils/imageStorage';
+import FishStorage from '../utils/fishStorage';
+import { toast } from 'react-hot-toast';
 
 interface FishCardProps {
   fish: FishData;
@@ -44,9 +46,16 @@ const FishCard: React.FC<FishCardProps> = ({
   const [isListingOnEbay, setIsListingOnEbay] = useState(false);
   const [ebayError, setEbayError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [isEditingQuantity, setIsEditingQuantity] = useState(false);
+  const [newQuantity, setNewQuantity] = useState((fish.qtyoh || 0).toString());
+  const [localQtyoh, setLocalQtyoh] = useState<number>(fish.qtyoh || 0);
 
   const cartItem = items.find(item => item.fish.uniqueId === fish.uniqueId);
   const quantity = cartItem?.quantity || 0;
+
+  useEffect(() => {
+    setLocalQtyoh(fish.qtyoh || 0);
+  }, [fish.qtyoh]);
 
   if (fish.disabled && !isAdmin) return null;
 
@@ -102,7 +111,10 @@ const FishCard: React.FC<FishCardProps> = ({
     }
   };
 
-  const isLastOne = fish.qtyoh === 1;
+  const isLastOne = localQtyoh === 1;
+  // Check both isCategory (client-side flag) and is_category (database column)
+  const isCategory = fish.isCategory || fish.is_category;
+  const isSoldOut = !isCategory && (fish.sold_out || fish.qtyoh === 0);
   const { displayName, size, gender } = formatFishName(fish.name);
 
   // Function to check if the image is a base64 image
@@ -135,6 +147,38 @@ const FishCard: React.FC<FishCardProps> = ({
     }
   };
 
+  const handleSaveQuantity = async () => {
+    const quantity = parseInt(newQuantity);
+    if (!isNaN(quantity) && quantity >= 0 && fish.id) {
+      setIsUpdating(true);
+      try {
+        await FishStorage.updateItemQuantity(fish.id, quantity);
+        
+        // Update both local state and the fish object
+        setLocalQtyoh(quantity);
+        fish.qtyoh = quantity;
+        fish.sold_out = quantity === 0;
+        fish.disabled = quantity === 0;
+        
+        // Hide the editing UI
+        setIsEditingQuantity(false);
+        
+        // Show success message
+        toast.success(`Quantity updated to ${quantity}`);
+      } catch (error) {
+        console.error('Failed to update quantity:', error);
+        toast.error('Failed to update quantity. Please try again.');
+      } finally {
+        setIsUpdating(false);
+      }
+    }
+  };
+
+  const initializeQuantityEdit = () => {
+    setNewQuantity(localQtyoh.toString());
+    setIsEditingQuantity(true);
+  };
+
   return (
     <div 
       className={`
@@ -147,6 +191,12 @@ const FishCard: React.FC<FishCardProps> = ({
       {isLastOne && (
         <div className="absolute -top-3 left-4 bg-orange-500 text-white px-3 py-1 rounded-full text-xs font-medium shadow-sm">
           Last One!
+        </div>
+      )}
+      
+      {isSoldOut && (
+        <div className="absolute -top-3 right-4 bg-red-500 text-white px-3 py-1 rounded-full text-xs font-medium shadow-sm">
+          Sold Out
         </div>
       )}
 
@@ -249,9 +299,106 @@ const FishCard: React.FC<FishCardProps> = ({
               
               <div className={`flex items-center gap-2 ${isLastOne ? 'text-orange-600 font-medium' : ''}`}>
                 <Package className={`h-4 w-4 ${isLastOne ? 'text-orange-600' : ''}`} />
-                QTY Available: <span className={fish.qtyoh === 0 ? 'text-red-600' : isLastOne ? 'text-orange-600' : 'text-green-600'}>
-                  {fish.qtyoh || 0}
-                </span>
+                QTY Available: 
+                {isAdmin && isEditingQuantity ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={newQuantity}
+                      onChange={(e) => setNewQuantity(e.target.value)}
+                      className="w-20 px-2 py-1 border rounded"
+                      min="0"
+                      autoFocus
+                      disabled={isUpdating}
+                    />
+                    <button 
+                      onClick={handleSaveQuantity}
+                      className={`p-1 text-green-600 hover:bg-green-50 rounded ${isUpdating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      disabled={isUpdating}
+                    >
+                      <Check className="h-4 w-4" />
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setIsEditingQuantity(false);
+                        setNewQuantity(localQtyoh.toString());
+                      }}
+                      className="p-1 text-gray-500 hover:bg-gray-50 rounded"
+                      disabled={isUpdating}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className={localQtyoh === 0 ? 'text-red-600' : isLastOne ? 'text-orange-600' : 'text-green-600'}>
+                      {localQtyoh}
+                    </span>
+                    {isAdmin && (
+                      <button 
+                        onClick={() => {
+                          setNewQuantity(localQtyoh.toString());
+                          setIsEditingQuantity(true);
+                        }}
+                        className="text-blue-600 text-sm hover:underline"
+                      >
+                        Edit
+                      </button>
+                    )}
+                    {isAdmin && !isEditingQuantity && (
+                      <div className="flex gap-1">
+                        <button 
+                          onClick={() => {
+                            if (fish.id) {
+                              const newQty = Math.max(0, localQtyoh - 1);
+                              setIsUpdating(true);
+                              FishStorage.updateItemQuantity(fish.id, newQty).then(() => {
+                                // Update both local state and the fish object
+                                setLocalQtyoh(newQty);
+                                fish.qtyoh = newQty;
+                                fish.sold_out = newQty === 0;
+                                fish.disabled = newQty === 0;
+                                setIsUpdating(false);
+                              }).catch(error => {
+                                console.error('Failed to update quantity:', error);
+                                toast.error('Failed to update quantity');
+                                setIsUpdating(false);
+                              });
+                            }
+                          }}
+                          className="p-1 text-gray-600 hover:bg-gray-100 rounded"
+                          disabled={isUpdating || localQtyoh <= 0}
+                        >
+                          <Minus className="h-3 w-3" />
+                        </button>
+                        <button 
+                          onClick={() => {
+                            if (fish.id) {
+                              const newQty = localQtyoh + 1;
+                              setIsUpdating(true);
+                              FishStorage.updateItemQuantity(fish.id, newQty).then(() => {
+                                // Update both local state and the fish object
+                                setLocalQtyoh(newQty);
+                                fish.qtyoh = newQty;
+                                fish.sold_out = false;
+                                fish.disabled = false;
+                                setIsUpdating(false);
+                              }).catch(error => {
+                                console.error('Failed to update quantity:', error);
+                                toast.error('Failed to update quantity');
+                                setIsUpdating(false);
+                              });
+                            }
+                          }}
+                          className="p-1 text-gray-600 hover:bg-gray-100 rounded"
+                          disabled={isUpdating}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -266,7 +413,7 @@ const FishCard: React.FC<FishCardProps> = ({
                       ? 'bg-blue-500 hover:bg-blue-600 text-white'
                       : 'bg-orange-500 hover:bg-orange-600 text-white'
                   }`}
-                  disabled={fish.qtyoh === 0}
+                  disabled={fish.qtyoh === 0 || isSoldOut}
                 >
                   <ShoppingCart className="h-5 w-5" />
                   {isAdmin ? 'Add to Order' : 'Add to Cart'}

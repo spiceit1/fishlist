@@ -7,6 +7,8 @@ import ShippingForm, { ShippingFormData } from './ShippingForm';
 import PaymentForm, { PaymentFormData } from './PaymentForm';
 import OrderConfirmation from './OrderConfirmation';
 import SignUpPrompt from './SignUpPrompt';
+import { useCart } from '../../contexts/CartContext';
+import axios from 'axios';
 
 interface CheckoutControllerProps {
   items: CartItem[];
@@ -19,6 +21,7 @@ const GUEST_USER_ID = '00000000-0000-0000-0000-000000000000';
 
 const CheckoutController: React.FC<CheckoutControllerProps> = ({ items, onComplete }) => {
   const navigate = useNavigate();
+  const { clearCart } = useCart();
   const [currentStep, setCurrentStep] = useState<CheckoutStep>('shipping');
   const [shippingData, setShippingData] = useState<ShippingFormData | null>(null);
   const [savedAddresses, setSavedAddresses] = useState<ShippingFormData[]>([]);
@@ -126,7 +129,9 @@ const CheckoutController: React.FC<CheckoutControllerProps> = ({ items, onComple
           await supabase
             .from('shipping_addresses')
             .insert({
+              id: crypto.randomUUID(),
               user_id: data.user.id,
+              is_default: false,
               first_name: shippingData?.firstName,
               last_name: shippingData?.lastName,
               address_line1: shippingData?.addressLine1,
@@ -134,8 +139,11 @@ const CheckoutController: React.FC<CheckoutControllerProps> = ({ items, onComple
               city: shippingData?.city,
               state: shippingData?.state,
               postal_code: shippingData?.postalCode,
+              country: 'US',
               phone: shippingData?.phone,
-              email: email
+              email: email,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
             });
         }
 
@@ -154,37 +162,73 @@ const CheckoutController: React.FC<CheckoutControllerProps> = ({ items, onComple
 
   const handlePaymentSubmit = async (data: PaymentFormData) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      // Get user info first if not guest
+      let userId = GUEST_USER_ID;
+      if (!isGuest) {
+        const { data: { user } } = await supabase.auth.getUser();
+        userId = user?.id || GUEST_USER_ID;
+      }
+
+      // Get the next order sequence number
+      const { data: sequenceData, error: sequenceError } = await supabase
+        .rpc('get_next_order_sequence', { sequence_name: 'order_number' });
       
+      if (sequenceError) {
+        console.error('Error getting order sequence:', sequenceError);
+        throw new Error('Failed to generate order number');
+      }
+      
+      // Format the order number with year, month and sequence
+      const now = new Date();
+      const year = now.getFullYear().toString().slice(2); // 2-digit year
+      const month = (now.getMonth() + 1).toString().padStart(2, '0'); // 2-digit month
+      const day = now.getDate().toString().padStart(2, '0'); // 2-digit day
+      const orderNumber = `ORD-${year}${month}${day}-${sequenceData}`;
+      
+      // Save order number for later use
+      setOrderNumber(orderNumber);
+
+      // Create the order first as pending
       const { data: order, error: orderError } = await supabase
         .from('orders')
         .insert({
-          user_id: user?.id || GUEST_USER_ID,
-          status: data.paypalOrderId ? 'completed' : 'pending',
-          payment_provider: data.paypalOrderId ? 'paypal' : 'credit_card',
-          payment_id: data.paypalOrderId || null,
+          id: crypto.randomUUID(), // UUID for the order
+          order_number: orderNumber,
+          user_id: userId,
+          status: 'pending',
           shipping_address: {
             ...shippingData,
-            email: isGuest ? guestEmail : user?.email
+            email: isGuest ? guestEmail : shippingData?.email
           },
           billing_address: useSameAddress ? {
             ...shippingData,
-            email: isGuest ? guestEmail : user?.email
+            email: isGuest ? guestEmail : shippingData?.email
           } : billingAddress,
           total_amount: calculateTotal().total,
-          shipping_option_id: null,
-          guest_email: isGuest ? guestEmail : null
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          guest_email: isGuest ? guestEmail : null,
+          stripe_payment_intent: null, // Will be updated after payment
+          stripe_payment_status: null, // Will be updated after payment
+          tracking_number: null,
+          shipping_carrier: null,
+          tracking_url: null
         })
         .select()
         .single();
 
-      if (orderError) throw orderError;
+      if (orderError) {
+        console.error('Order creation error:', orderError);
+        throw new Error('Failed to create order');
+      }
 
       const orderItems = items.map(item => ({
+        id: crypto.randomUUID(),
         order_id: order.id,
-        fish_id: item.fish.id,
         quantity: item.quantity,
         price_at_time: item.fish.saleCost || 0,
+        created_at: new Date().toISOString(),
+        fish_id: item.fish.id,
         name_at_time: item.fish.name
       }));
 
@@ -192,31 +236,138 @@ const CheckoutController: React.FC<CheckoutControllerProps> = ({ items, onComple
         .from('order_items')
         .insert(orderItems);
 
-      if (itemsError) throw itemsError;
-
-      if (!data.paypalOrderId && data.saveCard && user) {
-        const { error: cardError } = await supabase
-          .from('payment_methods')
-          .insert({
-            user_id: user.id,
-            card_brand: 'Visa',
-            last_four: data.cardNumber.slice(-4),
-            expiry_month: parseInt(data.expiryMonth),
-            expiry_year: parseInt(data.expiryYear)
-          });
-
-        if (cardError) throw cardError;
+      if (itemsError) {
+        console.error('Order items creation error:', itemsError);
+        // Rollback the order
+        await supabase
+          .from('orders')
+          .delete()
+          .eq('id', order.id);
+        throw new Error('Failed to create order items');
       }
 
-      setOrderNumber(order.order_number);
+      // If payment was successful, update order status
+      const { error: updateError } = await supabase
+        .from('orders')
+        .update({ 
+          status: 'paid',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', order.id);
+
+      if (updateError) {
+        console.error('Order status update error:', updateError);
+        throw new Error('Failed to update order status');
+      }
+
+      // Update quantities on hand for each item purchased
+      for (const item of items) {
+        // Skip processing if this is a category
+        if (item.fish.isCategory) continue;
+        
+        // Get current quantity
+        const { data: fishData, error: fishGetError } = await supabase
+          .from('fish_data')
+          .select('qtyoh, is_category')
+          .eq('id', item.fish.id)
+          .single();
+          
+        if (fishGetError) {
+          console.error(`Error getting quantity for fish ${item.fish.name}:`, fishGetError);
+          continue;
+        }
+        
+        // Skip processing if this is a category (double-check from DB)
+        if (fishData.is_category) continue;
+        
+        const currentQty = fishData.qtyoh || 0;
+        const newQty = Math.max(0, currentQty - item.quantity);
+        const isOutOfStock = newQty === 0;
+        
+        // Update quantity and disable item if it's out of stock
+        const { error: qtyUpdateError } = await supabase
+          .from('fish_data')
+          .update({ 
+            qtyoh: newQty,
+            disabled: isOutOfStock, // Mark as disabled if quantity is zero
+            sold_out: isOutOfStock  // Also mark as sold out if quantity is zero
+          })
+          .eq('id', item.fish.id);
+          
+        if (qtyUpdateError) {
+          console.error(`Error updating quantity for fish ${item.fish.name}:`, qtyUpdateError);
+        }
+      }
+
+      // Store payment method details for confirmation
+      const getPaymentDetails = async () => {
+        if (data.paymentMethodId) {
+          try {
+            // Use Stripe API to get payment method details
+            const response = await fetch(`/api/stripe/payment-methods/${data.paymentMethodId}`, {
+              method: 'GET'
+            });
+            
+            if (response.ok) {
+              const paymentData = await response.json();
+              setPaymentMethod({
+                brand: paymentData.card.brand || 'card',
+                last4: paymentData.card.last4 || '****'
+              });
+              return {
+                brand: paymentData.card.brand || 'card',
+                last4: paymentData.card.last4 || '****'
+              };
+            }
+          } catch (error) {
+            console.error('Error fetching payment method details:', error);
+          }
+        }
+        
+        // Fallback if we can't get the payment details
+        return {
+          brand: 'Card',
+          last4: '****'
+        };
+      };
       
-      // Clear the cart after successful order creation
+      const paymentDetails = await getPaymentDetails();
+
+      // Send order confirmation emails
+      try {
+        const emailData = {
+          orderNumber,
+          items: items.map(item => ({
+            name: item.fish.name,
+            quantity: item.quantity,
+            price: item.fish.saleCost || 0
+          })),
+          shippingAddress: {
+            ...shippingData,
+            email: isGuest ? guestEmail : shippingData?.email || ''
+          },
+          orderSummary: calculateTotal(),
+          paymentMethod: paymentDetails
+        };
+        
+        const emailResponse = await axios.post('/api/email/send-order-emails', emailData);
+        console.log('Order emails sent:', emailResponse.data);
+      } catch (emailError) {
+        // Don't fail the order if email sending fails
+        console.error('Error sending order emails:', emailError);
+      }
+
+      // Clear the cart after successful checkout
+      clearCart();
+      
+      // Call onComplete to notify parent components
       onComplete();
       
-      setCurrentStep('confirmation');
+      // Redirect to success page
+      navigate(`/success/${order.id}`);
     } catch (error) {
       console.error('Error processing order:', error);
-      setError('Failed to process order. Please try again.');
+      setError('Failed to process your order. Please try again.');
     }
   };
 
@@ -267,16 +418,21 @@ const CheckoutController: React.FC<CheckoutControllerProps> = ({ items, onComple
                 await supabase
                   .from('shipping_addresses')
                   .insert({
+                    id: crypto.randomUUID(),
                     user_id: user.id,
+                    is_default: false,
                     first_name: data.firstName,
                     last_name: data.lastName,
                     address_line1: data.addressLine1,
-                    address_line2: data.addressLine2,
+                    address_line2: data.addressLine2 || null,
                     city: data.city,
                     state: data.state,
                     postal_code: data.postalCode,
+                    country: 'US',
                     phone: data.phone,
-                    email: data.email
+                    email: data.email,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
                   });
                 await loadSavedData();
               } catch (error) {
@@ -327,77 +483,9 @@ const CheckoutController: React.FC<CheckoutControllerProps> = ({ items, onComple
             <PaymentForm
               items={items}
               total={calculateTotal().total}
-              onPayPalSuccess={async (details) => {
-                try {
-                  console.log('PayPal payment completed:', details);
-                  
-                  // Set payment method for PayPal
-                  setPaymentMethod({
-                    brand: 'PayPal',
-                    last4: details.purchase_units?.[0]?.payee?.email_address || 'PayPal'
-                  });
-
-                  // Create order in database
-                  const { data: { user } } = await supabase.auth.getUser();
-                  
-                  const { data: order, error: orderError } = await supabase
-                    .from('orders')
-                    .insert({
-                      user_id: user?.id || GUEST_USER_ID,
-                      status: 'completed',
-                      payment_provider: 'paypal',
-                      payment_id: details.id,
-                      shipping_address: {
-                        ...shippingData,
-                        email: isGuest ? guestEmail : user?.email
-                      },
-                      billing_address: useSameAddress ? {
-                        ...shippingData,
-                        email: isGuest ? guestEmail : user?.email
-                      } : billingAddress,
-                      total_amount: calculateTotal().total,
-                      shipping_option_id: null,
-                      guest_email: isGuest ? guestEmail : null
-                    })
-                    .select()
-                    .single();
-
-                  if (orderError) throw orderError;
-
-                  const orderItems = items.map(item => ({
-                    order_id: order.id,
-                    fish_id: item.fish.id,
-                    quantity: item.quantity,
-                    price_at_time: item.fish.saleCost || 0,
-                    name_at_time: item.fish.name
-                  }));
-
-                  const { error: itemsError } = await supabase
-                    .from('order_items')
-                    .insert(orderItems);
-
-                  if (itemsError) throw itemsError;
-
-                  // Set order details and move to confirmation
-                  setOrderNumber(order.order_number);
-                  onComplete();
-                  setCurrentStep('confirmation');
-                } catch (error) {
-                  console.error('Error processing PayPal payment:', error);
-                  setError('Failed to process PayPal payment. Please try again.');
-                }
-              }}
-              onPayPalError={(error) => {
-                console.error('PayPal error:', error);
-                setError('Failed to process PayPal payment. Please try again.');
-              }}
               onSubmit={handlePaymentSubmit}
               savedCards={!isGuest ? savedCards : []}
-              shippingAddress={shippingData!}
               showSaveCard={!isGuest}
-              onSaveCard={async (data) => {
-                console.log('Saving card:', data);
-              }}
             />
           </div>
         );

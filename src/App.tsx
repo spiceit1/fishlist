@@ -14,6 +14,13 @@ import OrderTracking from './components/orders/OrderTracking';
 import AdminDashboard from './components/admin/AdminDashboard';
 import EbayManagement from './components/admin/EbayManagement';
 import { useCart } from './contexts/CartContext';
+import { Elements } from '@stripe/react-stripe-js';
+import stripePromise from './lib/stripe';
+import SuccessPage from './components/SuccessPage';
+import UserMenu from './components/UserMenu';
+import AccountPage from './routes/AccountPage';
+import LoginPage from './routes/LoginPage';
+import { AuthProvider } from './contexts/AuthContext';
 
 const AppContent = () => {
   const navigate = useNavigate();
@@ -206,6 +213,7 @@ const AppContent = () => {
                     </button>
                   </div>
                 )}
+                <UserMenu />
                 <CartButton 
                   items={cartItems}
                   isAdmin={isAdmin}
@@ -447,6 +455,9 @@ const AppContent = () => {
           <Route path="/checkout" element={<CheckoutPage />} />
           <Route path="/orders" element={<OrderHistory />} />
           <Route path="/orders/:orderNumber" element={<OrderTracking />} />
+          <Route path="/success/:orderId" element={<SuccessPage />} />
+          <Route path="/account" element={<AccountPage />} />
+          <Route path="/login" element={<LoginPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
@@ -502,13 +513,17 @@ const AppContent = () => {
 
 function App() {
   return (
-    <CartProvider>
-      <FishDataProvider>
-        <Router>
-          <AppContent />
-        </Router>
-      </FishDataProvider>
-    </CartProvider>
+    <Elements stripe={stripePromise}>
+      <CartProvider>
+        <FishDataProvider>
+          <AuthProvider>
+            <Router>
+              <AppContent />
+            </Router>
+          </AuthProvider>
+        </FishDataProvider>
+      </CartProvider>
+    </Elements>
   );
 }
 

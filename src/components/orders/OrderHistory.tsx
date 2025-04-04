@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Package, Truck, Calendar, ExternalLink } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface Order {
   id: string;
@@ -23,12 +24,23 @@ const OrderHistory: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { user } = useAuth();
 
   useEffect(() => {
-    loadOrders();
-  }, []);
+    // Only load orders if user is authenticated
+    if (user) {
+      loadOrders(user.id);
+    } else {
+      setLoading(false);
+    }
+  }, [user]);
 
-  const loadOrders = async () => {
+  const loadOrders = async (userId: string) => {
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
+
     try {
       const { data, error } = await supabase
         .from('orders')
@@ -40,7 +52,7 @@ const OrderHistory: React.FC = () => {
             name_at_time
           )
         `)
-        .eq('user_id', supabase.auth.getUser()?.id)
+        .eq('user_id', userId)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -74,6 +86,19 @@ const OrderHistory: React.FC = () => {
     return (
       <div className="flex justify-center items-center h-64">
         <div className="animate-spin h-8 w-8 border-4 border-orange-500 border-t-transparent rounded-full"></div>
+      </div>
+    );
+  }
+
+  // If no user is logged in, show a login message
+  if (!user) {
+    return (
+      <div className="text-center py-12">
+        <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+        <h3 className="text-lg font-medium text-gray-900">Please Login to View Orders</h3>
+        <p className="text-gray-600 mt-2">
+          You need to be logged in to view your order history.
+        </p>
       </div>
     );
   }

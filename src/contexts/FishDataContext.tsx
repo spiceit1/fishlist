@@ -12,6 +12,7 @@ interface FishDataContextType {
   loading: boolean;
   error: string | null;
   refreshData: () => Promise<void>;
+  updateFishQuantities: (orderItems: {fish_id: string; quantity: number}[]) => void;
   categories: string[];
   updateCategories: (fishData: FishData[]) => void;
   connectionState: 'connecting' | 'connected' | 'error';
@@ -25,6 +26,7 @@ const FishDataContext = createContext<FishDataContextType>({
   loading: false,
   error: null,
   refreshData: async () => {},
+  updateFishQuantities: () => {},
   categories: [],
   updateCategories: () => {},
   connectionState: 'connecting',
@@ -126,6 +128,41 @@ const FishDataProvider: React.FC<{ children: React.ReactNode }> = ({ children })
     await loadInitialData();
   };
 
+  const updateFishQuantities = (orderItems: {fish_id: string; quantity: number}[]) => {
+    if (!orderItems || orderItems.length === 0) return;
+    
+    // Create a map for faster lookups
+    const quantityMap = new Map();
+    orderItems.forEach(item => {
+      quantityMap.set(item.fish_id, item.quantity);
+    });
+    
+    // Update the fish quantities in the state without fetching from the database
+    setFishData(prevData => 
+      prevData.map(fish => {
+        // If this item is in the order, update its quantity
+        if (fish.id && quantityMap.has(fish.id)) {
+          const currentQty = fish.qtyoh || 0;
+          // Get the purchase quantity from the map
+          const purchasedQty = quantityMap.get(fish.id);
+          // Calculate new quantity
+          const newQty = Math.max(0, currentQty - purchasedQty);
+          const isOutOfStock = newQty === 0;
+          
+          // Return updated fish object
+          return {
+            ...fish,
+            qtyoh: newQty,
+            disabled: isOutOfStock || fish.disabled,
+            sold_out: (isOutOfStock && !fish.isCategory && !fish.is_category) || fish.sold_out
+          };
+        }
+        // Not in order, return unchanged
+        return fish;
+      })
+    );
+  };
+
   // Load initial data when component mounts
   useEffect(() => {
     console.log('FishDataProvider useEffect triggered - loading initial data');
@@ -149,6 +186,7 @@ const FishDataProvider: React.FC<{ children: React.ReactNode }> = ({ children })
       loading,
       error,
       refreshData,
+      updateFishQuantities,
       categories,
       updateCategories,
       connectionState,

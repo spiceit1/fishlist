@@ -610,6 +610,41 @@ class FishStorage {
       throw error instanceof Error ? error : new Error('Failed to clear fish data');
     }
   }
+
+  public static async updateItemQuantity(id: string, quantity: number): Promise<void> {
+    if (!FishStorage.initialized) {
+      throw new Error('FishStorage not initialized');
+    }
+
+    try {
+      console.log(`Updating item quantity: ${id} (new quantity: ${quantity})`);
+      
+      // Ensure quantity is non-negative
+      const safeQuantity = Math.max(0, quantity);
+      
+      // Check if the item will be out of stock
+      const isOutOfStock = safeQuantity === 0;
+      
+      const { error } = await supabase
+        .from('fish_data')
+        .update({ 
+          qtyoh: safeQuantity,
+          sold_out: isOutOfStock, // Mark as sold out if quantity is zero
+          disabled: isOutOfStock // Also disable if quantity is zero
+        })
+        .eq('id', id);
+
+      if (error) {
+        console.error('Error updating item quantity:', error);
+        throw error;
+      }
+
+      console.log(`Successfully updated item quantity: ${id} to ${safeQuantity}`);
+    } catch (error) {
+      console.error('Error in updateItemQuantity:', error);
+      throw error;
+    }
+  }
 }
 
 export default FishStorage;

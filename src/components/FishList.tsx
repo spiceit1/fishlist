@@ -312,6 +312,23 @@ const FishList = React.memo<FishListProps>(({
     }
   };
 
+  // Add a function to handle local quantity updates without refreshing all data
+  const handleLocalQuantityUpdate = useCallback((fishId: string, newQuantity: number) => {
+    // Just update the specific fish in the local state
+    setFishData(prevData => 
+      prevData.map(fish => 
+        fish.id === fishId
+          ? { 
+              ...fish, 
+              qtyoh: newQuantity,
+              sold_out: newQuantity === 0,
+              disabled: newQuantity === 0 || fish.disabled
+            }
+          : fish
+      )
+    );
+  }, []);
+
   const filteredFishData = useMemo(() => {
     return fishData.filter(fish => {
       if (fish.isCategory) return true;
@@ -501,6 +518,7 @@ const FishList = React.memo<FishListProps>(({
                             onUpdateSalePrice={(price: number) => handleImageUpdate(fish.searchName, price.toString())}
                             onDelete={() => handleDeleteItem(fish)}
                             onImageUpdated={() => refreshData()}
+                            onQuantityUpdate={handleLocalQuantityUpdate}
                           />
                         ))}
                       </div>

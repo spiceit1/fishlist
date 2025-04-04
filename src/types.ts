@@ -10,7 +10,8 @@ export interface FishData {
   description?: string;
   category?: string;
   searchUrl?: string;
-  isCategory?: boolean;  // Indicates if this is a category header
+  isCategory?: boolean;  // Indicates if this is a category header (used in client)
+  is_category?: boolean; // Database column name for category flag
   imageUrl?: string;     // URL of the fish image
   quantity?: number;     // Quantity in cart
   disabled?: boolean;    // Whether the item is disabled
@@ -18,6 +19,7 @@ export interface FishData {
   qtyoh?: number;       // Quantity on hand (lowercase to match DB column)
   ebay_listing_id?: string;  // eBay listing ID
   ebay_listing_status?: string;  // eBay listing status
+  sold_out?: boolean;   // Whether the item is sold out (out of stock)
 }
 
 export interface CartItem {

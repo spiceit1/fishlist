@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Package, Mail, AlertCircle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface ShippingFormProps {
   onSubmit: (data: ShippingFormData) => void;
@@ -29,6 +30,7 @@ const ShippingForm: React.FC<ShippingFormProps> = ({
   onSaveAddress,
   requireEmail = false
 }) => {
+  const { user } = useAuth();
   const [formData, setFormData] = React.useState<ShippingFormData>(initialData || {
     firstName: '',
     lastName: '',
@@ -38,7 +40,7 @@ const ShippingForm: React.FC<ShippingFormProps> = ({
     state: '',
     postalCode: '',
     phone: '',
-    email: ''
+    email: user?.email || ''
   });
 
   const [selectedAddress, setSelectedAddress] = React.useState<number>(-1);
@@ -49,31 +51,45 @@ const ShippingForm: React.FC<ShippingFormProps> = ({
   const [loginError, setLoginError] = useState<string | null>(null);
   const [resetPasswordSent, setResetPasswordSent] = useState(false);
 
+  // Prefill email when user logs in or changes
+  useEffect(() => {
+    if (user?.email && (!formData.email || formData.email === '')) {
+      setFormData(prevData => ({
+        ...prevData,
+        email: user.email || ''
+      }));
+    }
+  }, [user]);
+
   // Check if email exists when it changes
   useEffect(() => {
     const checkEmailExists = async () => {
+      // Skip the check if user is already logged in
+      if (user) return;
+      
       if (!formData.email || formData.email.trim() === '') return;
 
       try {
-        // Check if this email exists in auth
-        const { data, error } = await supabase.auth.signInWithOtp({
-          email: formData.email,
-          options: {
-            shouldCreateUser: false
-          }
-        });
-
-        if (error && error.message.includes('Email not confirmed')) {
-          // This means the user exists but hasn't confirmed their email
-          setExistingCustomer(true);
-        } else if (!error) {
-          // No error means the email exists and OTP was sent
+        // We can't directly check if an email exists in Supabase client SDK
+        // So let's try to use resetPasswordForEmail, which is a safe method
+        // If the response doesn't contain specific "not found" errors, the user likely exists
+        const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+          formData.email,
+          { redirectTo: `${window.location.origin}/reset-password` }
+        );
+        
+        // If there's no error or error doesn't specifically mention user/email not found
+        if (!resetError || 
+            (resetError.message && 
+             !resetError.message.includes("Email not found") && 
+             !resetError.message.includes("User not found"))) {
           setExistingCustomer(true);
         } else {
           setExistingCustomer(false);
         }
       } catch (error) {
         console.error('Error checking email:', error);
+        // If we get here, don't change the existing customer state
       }
     };
 
@@ -83,12 +99,13 @@ const ShippingForm: React.FC<ShippingFormProps> = ({
     }, 500);
 
     return () => clearTimeout(timeoutId);
-  }, [formData.email]);
+  }, [formData.email, user]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (existingCustomer && !showLoginPrompt) {
+    // Skip login prompt if user is already logged in
+    if (existingCustomer && !showLoginPrompt && !user) {
       setShowLoginPrompt(true);
       return;
     }
@@ -137,7 +154,11 @@ const ShippingForm: React.FC<ShippingFormProps> = ({
       onSubmit(formData);
     } catch (error: any) {
       console.error('Login error:', error);
-      setLoginError('Invalid password. Please try again.');
+      if (error.message && error.message.includes('Invalid login credentials')) {
+        setLoginError('Incorrect password. Please try again or use the forgot password option.');
+      } else {
+        setLoginError('There was a problem signing in. Please try again later.');
+      }
     }
   };
 
@@ -150,9 +171,13 @@ const ShippingForm: React.FC<ShippingFormProps> = ({
       if (error) throw error;
       
       setResetPasswordSent(true);
+      // For security reasons, don't confirm whether the email exists or not
+      setLoginError(null);
     } catch (error) {
       console.error('Reset password error:', error);
-      setLoginError('Failed to send reset password email. Please try again.');
+      // For security reasons, show a generic message
+      setResetPasswordSent(true);
+      setLoginError(null);
     }
   };
 
@@ -214,7 +239,7 @@ const ShippingForm: React.FC<ShippingFormProps> = ({
         <div className="space-y-6">
           {resetPasswordSent ? (
             <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg">
-              Password reset email has been sent. Please check your inbox.
+              If an account with this email exists, a password reset link will be sent to your inbox.
             </div>
           ) : (
             <>

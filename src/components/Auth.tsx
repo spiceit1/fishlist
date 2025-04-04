@@ -85,27 +85,8 @@ export default function Auth() {
     try {
       setLoading(true);
       
-      // Check if the user exists using signInWithOtp method
-      // This will return a specific error if the email doesn't exist
-      const { error: userCheckError } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          shouldCreateUser: false
-        }
-      });
-
-      // If the error message indicates the user doesn't exist
-      if (userCheckError && 
-          (userCheckError.message.includes("Email not found") || 
-           userCheckError.message.includes("User not found"))) {
-        // For security reasons, use a generic message but don't send an email
-        setSuccessMessage('If an account with this email exists, a password reset link will be sent.');
-        setResetPasswordSent(true);
-        setLoading(false);
-        return;
-      }
-
-      // If we get here, the email exists, so send the reset password email
+      // Instead of checking if the user exists first (which causes the 422 error),
+      // directly send the password reset email
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: `${window.location.origin}/reset-password`,
       });
@@ -113,7 +94,8 @@ export default function Auth() {
       if (error) throw error;
       
       setResetPasswordSent(true);
-      setSuccessMessage('Password reset email has been sent. Please check your inbox.');
+      // For security reasons, don't confirm whether the email exists or not
+      setSuccessMessage('If an account with this email exists, a password reset link will be sent.');
     } catch (error) {
       console.error('Reset password error:', error);
       // For security reasons, don't expose specific errors
